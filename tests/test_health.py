@@ -19,13 +19,13 @@ def seed_outbox(root: Path, *, captured: int, pending: int, verified: int, actor
     db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE capture_events (envelope_json TEXT, disposition TEXT, reason TEXT, enqueued_at TEXT)")
-        conn.execute("CREATE TABLE delivery_events (state TEXT, content TEXT)")
+        conn.execute("CREATE TABLE delivery_events (event_id TEXT, state TEXT, object_id TEXT, attempt_count INT, content TEXT)")
         for _ in range(captured):
             conn.execute("INSERT INTO capture_events VALUES (?, 'shadow', NULL, 'now')", (json.dumps({"prompt": SECRET}),))
         for _ in range(pending):
-            conn.execute("INSERT INTO delivery_events VALUES ('pending', ?)", (SECRET,))
+            conn.execute("INSERT INTO delivery_events VALUES (NULL, 'pending', NULL, 0, ?)", (SECRET,))
         for _ in range(verified):
-            conn.execute("INSERT INTO delivery_events VALUES ('verified', ?)", (SECRET,))
+            conn.execute("INSERT INTO delivery_events VALUES (NULL, 'verified', 'ep-x', 1, ?)", (SECRET,))
 
 
 def run_health(home: Path, plugin_data: Path | None, *args: str) -> tuple[dict, str]:
@@ -175,3 +175,17 @@ def test_setup_refuses_without_a_plugin_data_dir(tmp_path: Path) -> None:
         assert "refusing" in done.stderr
     # Nothing was installed anywhere, in particular not in the legacy root.
     assert not (tmp_path / ".local").exists()
+
+
+def test_one_event_is_reported_by_exact_id_without_content(tmp_path: Path) -> None:
+    data = tmp_path / "plugin-data"
+    seed_outbox(data, captured=0, pending=0, verified=0)
+    db = data / "alice" / "home" / "shadow.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO delivery_events VALUES ('evt-1', 'verified', 'ep-9', 2, ?)", (SECRET,))
+        conn.execute("INSERT INTO delivery_events VALUES ('evt-2', 'pending', NULL, 0, ?)", (SECRET,))
+    report, raw = run_health(tmp_path, data, "--event", "evt-1")
+    assert report["event"] == {"event_id": "evt-1", "found": True, "state": "verified", "object_id": "ep-9", "attempts": 2}
+    assert SECRET not in raw
+    report, _ = run_health(tmp_path, data, "--event", "evt-404")
+    assert report["event"] == {"event_id": "evt-404", "found": False}

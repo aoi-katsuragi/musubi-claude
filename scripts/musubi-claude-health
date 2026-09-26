@@ -44,6 +44,21 @@ def _outbox_counts(db: Path) -> dict[str, Any]:
     return result
 
 
+def _event(db: Path, event_id: str) -> dict[str, Any]:
+    """One delivery row's state and receipt id, never its content."""
+    if not db.is_file():
+        return {"event_id": event_id, "found": False}
+    try:
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2) as conn:
+            row = conn.execute("SELECT state, object_id, attempt_count FROM delivery_events WHERE event_id = ?", (event_id,)).fetchone()
+    except sqlite3.Error as exc:
+        return {"event_id": event_id, "error": f"outbox_unreadable: {type(exc).__name__}"}
+    if row is None:
+        return {"event_id": event_id, "found": False}
+    state, object_id, attempts = row
+    return {"event_id": event_id, "found": True, "state": state, "object_id": object_id, "attempts": attempts}
+
+
 def _degraded(path: Path) -> dict[str, Any]:
     """Summarise the tail of a degraded.jsonl: reason counts and the latest time."""
     if not path.is_file():
@@ -80,7 +95,7 @@ def _undelivered(counts: dict[str, Any]) -> int:
     return int(sum(v for k, v in delivery.items() if k not in ("verified", "dead")))
 
 
-def report(probe: bool) -> dict[str, Any]:
+def report(probe: bool, event_id: str | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "settings_source": rt.settings_source,
         "state_root_source": rt.state_root_source,
@@ -120,6 +135,8 @@ def report(probe: bool) -> dict[str, Any]:
             out["transport"] = {"ok": False, "error": str(exc)}
         db = root / config.actor / config.zone / "shadow.db"
         out["outbox"] = _outbox_counts(db)
+        if event_id:
+            out["event"] = _event(db, event_id)
         if probe and bin_path:
             try:
                 done = subprocess.run(
@@ -152,6 +169,7 @@ def report(probe: bool) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--probe", action="store_true", help="also make one bounded provider status call")
+    parser.add_argument("--event", help="report one delivery record's state by its exact event_id")
     # Arguments come from a user's free-text /musubi-claude:health line, and an
     # argparse exit would abort the skill. Accept "probe" without dashes and
     # report anything else instead of failing on it.
@@ -160,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         args.probe = True
         extra = [item for item in extra if item != "probe"]
     try:
-        payload = report(args.probe)
+        payload = report(args.probe, args.event)
     except Exception as exc:  # noqa: BLE001 - health must report, never abort the skill
         payload = {"error": f"health_failed: {type(exc).__name__}: {str(exc)[:200]}"}
     if extra:
