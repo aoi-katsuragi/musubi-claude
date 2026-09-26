@@ -15,7 +15,7 @@
 set -u
 component="${1:-}"
 case "$component" in
-  stop|session-start|mcp|health|prompt|thoughts) ;;
+  stop|session-start|mcp|health|prompt|thoughts|compact) ;;
   *) echo "musubi-claude-run: unknown component '$component'" >&2; exit 2 ;;
 esac
 root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
@@ -78,9 +78,10 @@ else
   problem="musubi-harness is not installed"
 fi
 
-# Not set up (or out of date). Prompt recall stays silent and records nothing:
-# it runs on every prompt, and session-start already tells the user once.
-if [ "$component" = prompt ]; then
+# Not set up (or out of date). Prompt recall and compaction stay silent and
+# record nothing: without the harness there were no Musubi tool results to
+# checkpoint, and session-start already tells the user once.
+if [ "$component" = prompt ] || [ "$component" = compact ]; then
   exit 0
 fi
 
