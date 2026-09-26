@@ -1,0 +1,7 @@
+[
+  {
+    "name": "musubi-thoughts",
+    "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/musubi_claude_thoughts.py\" --config \"${CLAUDE_PLUGIN_DATA}/monitor/stream.json\"",
+    "description": "Live Musubi thoughts from other agents (verified mode with a Musubi URL and token)"
+  }
+]
