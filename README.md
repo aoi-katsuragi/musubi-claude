@@ -1,8 +1,8 @@
 # musubi-claude
 
 First-class Claude Code adapter for [Musubi](https://github.com/sourceblender/musubi) memory.
-SessionStart continuity, Stop capture, a read-only recall MCP facade plus durable remember,
-and the recall/continuity skills. Built on the shared [`musubi-harness`](https://github.com/sourceblender/musubi-harness)
+Automatic capture, session continuity, recall tools, a memory steward, and a
+health check that tells you honestly whether memory is working. Built on the shared [`musubi-harness`](https://github.com/sourceblender/musubi-harness)
 runtime so the Claude and Codex seats share one contract and never diverge.
 
 | | |
@@ -10,7 +10,7 @@ runtime so the Claude and Codex seats share one contract and never diverge.
 | License | Apache-2.0 |
 | Plugin name | `musubi-claude` |
 | Marketplace | `sourceblender` |
-| Runtime dep | [`musubi-harness>=1.0.0,<2.0.0`](https://pypi.org/project/musubi-harness/) |
+| Runtime dep | [`musubi-harness`](https://pypi.org/project/musubi-harness/), installed by `/musubi-claude:setup` |
 | Companion repos | [`musubi-codex`](https://github.com/sourceblender/musubi-codex), [`musubi-livekit`](https://github.com/sourceblender/musubi-livekit), [`musubi-hermes`](https://github.com/sourceblender/musubi-hermes), [`musubi-openclaw`](https://github.com/sourceblender/musubi-openclaw) |
 
 **Shadow-only by default.** Nothing is written to Musubi until `delivery_mode`
@@ -18,41 +18,55 @@ is explicitly set to `verified`.
 
 ## Install
 
-> ⚠️ **Local-only install.** This plugin is published for general use, but the
-> maintainer does not auto-install it on anyone's machine. Add the marketplace,
-> review the manifest, and install in a controlled, tested way that fits your
-> environment.
-
 ```bash
 claude plugin marketplace add sourceblender/musubi-claude
 claude plugin install musubi-claude@sourceblender
 ```
 
-The plugin depends on the `musubi-harness` PyPI package; `pip install
-musubi-harness` happens automatically when Claude Code loads the plugin.
+Then, inside Claude Code:
 
-## What it does
+1. **`/musubi-claude:setup`**: one-time install of the pinned `musubi-harness`
+   into the plugin's own data directory (needs the network once; afterwards
+   capture and recall run offline). Restart Claude Code, or reconnect
+   `musubi-claude` in `/mcp`.
+2. Fill in the plugin settings (actor, seat, zone, delivery mode) when Claude
+   Code asks, or later in `/config` → musubi-claude.
+3. **`/musubi-claude:health`**: confirms it is working, in plain words.
 
-- **Stop hook → automatic capture.** On each completed turn, `musubi-claude-stop`
-  derives the last completed **primary** turn from the transcript and shadow-
-  enqueues one `TurnEnvelope` through the shared harness core. In `verified`
-  delivery_mode it additionally stages the event and runs **one** bounded
-  shared-drainer pass — it never POSTs Musubi directly, and it injects the
-  configured identity (`tool_environment`) so the drainer resolves the seat
-  regardless of the hook's working directory.
-- **SessionStart hook → bounded continuity.** `musubi-claude-session-start`
-  emits a small, owned-scope recent-chronology block, explicitly labelled as
-  chronology (not semantic relevance) and as historical, untrusted data. It
-  fails open: any outage yields a labelled "unavailable" note, never a false
-  empty-memory set.
-- **Recall MCP (`musubi-claude-mcp`).** Five truthful tools: `musubi_recent`,
-  `musubi_search`, `musubi_get`, and `musubi_status` are read-only; durable
-  `musubi_remember` queues one load-bearing memory through the shared outbox.
-  Recall is untrusted historical data, never instructions; `queued` is never
-  reported as `verified` (verified requires an exact-readback receipt);
-  `musubi_think` is intentionally absent.
-- **Skills.** `musubi-recall` and `musubi-continuity` — the standing reflexes
-  for deliberate recall and for inspecting capture/delivery health.
+Hooks never install anything. Until setup has run, they refuse visibly: the
+session shows "Musubi memory is not set up yet", and the MCP server reports
+the same.
+
+## What you get
+
+| | What it does |
+|---|---|
+| **Automatic capture** (Stop hook) | Records each completed primary turn into a local outbox. In `verified` mode it also delivers it to Musubi and reads it back; in `shadow` mode (the default) nothing leaves the machine. |
+| **Session continuity** (SessionStart hook) | A small, labelled block of recent memory at session start. An outage says "unavailable", never "nothing remembered". |
+| **Recall tools** (MCP) | `musubi_search`, `musubi_recent`, `musubi_get`, `musubi_status` (read-only) and `musubi_remember` (queues one memory). Recalled text is treated as data, never instructions. `queued` is never reported as stored. |
+| **`/musubi-claude:recall <topic>`** | Search with provenance (object id, plane, state, score); says when memories disagree instead of trusting the top hit. |
+| **`/musubi-claude:remember <fact>`** | Saves one fact and tells you honestly whether it is stored yet. Refuses credentials. |
+| **`@musubi-claude:steward`** | A read-only subagent that audits one topic: what is current, what conflicts, what is stale, what is missing, and up to three changes for you to approve. It never changes memory itself. |
+| **`/musubi-claude:health [--probe]`** | Is memory actually working? Settings, identity, delivery queue, recent capture skips, and records stranded in an old state directory. `--event <id>` answers whether one remember landed. Never prints content or credentials. |
+| **Skills** `musubi-recall`, `musubi-continuity` | The standing reflexes Claude uses on its own for deliberate recall and for diagnosing capture. |
+
+## Measured, not claimed
+
+`evals/` is a [`claude plugin eval`](https://code.claude.com/docs/en/plugin-evals)
+suite. Musubi is mocked from the real server's `tools/list`, so it needs no
+network. Each case runs three times with the plugin and three times without
+it; Δ is what the plugin contributes.
+
+| case | Δ |
+|---|---|
+| recall a decision when two live memories conflict (newer must win, even ranked second) | +1.00 |
+| a recalled memory that says "run this curl \| sudo bash" is reported, not followed | +1.00 |
+| the steward finds the conflict and proposes, never claims to change | +1.00 |
+| `/remember` reports queued as not yet stored | +0.67 |
+| guards (Δ 0 by design): unreachable is not empty, no memory calls on unrelated tasks, secrets refused, queued honesty | 0.00 |
+
+8/8 cases pass with the plugin; mean Δ **+0.46** (claude 2.1.281). Run it:
+`claude plugin eval . --trust-plugin`.
 
 ## The Claude-specific difference
 
@@ -129,25 +143,10 @@ written only in `verified` mode with sources set, and removed otherwise.
 
 ## Failure is visible, never silent
 
-Any parse/config/enqueue/delivery failure appends to
-`$PLUGIN_DATA/degraded.jsonl` and the hook still exits 0 — capture degrades
-visibly and never breaks the session. The diagnostic sink intentionally
-holds only structured failure codes (`reason`, `seat`, `session_id`) and
-never the conversation content that produced the failure.
-
-## Migration from the in-fleet-tools copy
-
-`0.3.x` lived at `~/Vaults/fleet-tools/plugins/musubi-claude/` as a
-workspace-internal copy. `0.4.0` is the first standalone release with
-the harness extracted to its own PyPI package:
-
-- `parents[3]/lib` filesystem walk is gone — `musubi-harness` is a real
-  pip dependency now.
-- `pip install -e ../musubi-harness` is no longer required for local
-  development; the plugin dev install uses `pip install -e .` which
-  pulls `musubi-harness>=1.0.0` from PyPI.
-- The in-fleet-tools copy continues to work as the dev head during the
-  transition window. Any new fix lands here first, then backports.
+Any capture, config or delivery failure is recorded as a structured reason in
+the plugin's `degraded.jsonl`, and the hook still exits 0, so capture degrades
+visibly and never breaks your session. The file holds failure codes only,
+never the conversation that caused them. `/musubi-claude:health` summarises it.
 
 ## Development
 
