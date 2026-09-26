@@ -116,6 +116,19 @@ def test_an_outdated_harness_is_refused_visibly_on_every_entry_point(tmp_path: P
     assert [r["reason"] for r in degraded(data)] == ["harness_outdated:stop", "harness_outdated:session-start", "harness_outdated:mcp"]
 
 
+def test_compaction_without_setup_is_silent_and_with_setup_runs_its_script(tmp_path: Path) -> None:
+    data = tmp_path / "plugin-data"
+    env = {"PATH": BARE_PATH, "HOME": str(tmp_path), "CLAUDE_PLUGIN_ROOT": str(ROOT), "CLAUDE_PLUGIN_DATA": str(data)}
+    for mode in ("checkpoint", "restore"):
+        done = subprocess.run([str(RUN), "compact", mode], input="{}", capture_output=True, text=True, env=env, timeout=30)
+        assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert not (data / "degraded.jsonl").exists()  # nothing to checkpoint without the harness
+    fake_venv(data, REQUIRED)
+    done = subprocess.run([str(RUN), "compact", "restore"], input="{}", capture_output=True, text=True, env=env, timeout=30)
+    assert done.stdout.strip() == f"ran {ROOT}/scripts/musubi-claude-compact"
+    assert os.access(ROOT / "scripts" / "musubi-claude-compact", os.X_OK)
+
+
 def test_an_unknown_component_is_refused(tmp_path: Path) -> None:
     result = run("../../etc/passwd", tmp_path)
     assert result.returncode == 2

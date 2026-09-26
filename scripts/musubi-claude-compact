@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""PreCompact / SessionStart(compact) hook entry point, run by musubi-claude-run.
+
+The work is in musubi_claude_compact (standard library only, so it is testable
+without the harness); this wrapper hands it the state root the rest of the
+plugin resolved, so the checkpoint, its degraded records and prompt recall's
+per-session state all live in one place.
+"""
+
+from __future__ import annotations
+
+import sys
+
+import musubi_claude_compact
+from musubi_claude_runtime import data_root
+
+if __name__ == "__main__":
+    raise SystemExit(musubi_claude_compact.main(["musubi-claude-compact", *sys.argv[1:]], root=data_root()))
