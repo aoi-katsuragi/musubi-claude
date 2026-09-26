@@ -1,0 +1,16 @@
+#!/bin/sh
+# On the Bash PATH while the plugin is enabled. Read-only health report; see
+# scripts/musubi-claude-health. Always exits 0 (a failing `!` command aborts the
+# whole skill), so every problem is reported as JSON instead.
+#
+# The Bash tool does not receive CLAUDE_PLUGIN_DATA, so /musubi-claude:health
+# passes it as --plugin-data. An empty value means the plugin data dir is
+# unknown; say so rather than silently reading the legacy root.
+if [ "${1:-}" = "--plugin-data" ]; then
+  if [ -z "${2:-}" ]; then
+    printf '%s\n' '{"error": "plugin_data_unknown", "detail": "--plugin-data was empty; run /musubi-claude:health from Claude Code"}'
+    exit 0
+  fi
+  CLAUDE_PLUGIN_DATA="$2"; export CLAUDE_PLUGIN_DATA; shift 2
+fi
+exec "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/scripts/musubi-claude-run" health "$@"

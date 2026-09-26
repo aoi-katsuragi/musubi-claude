@@ -1,0 +1,20 @@
+#!/bin/sh
+# On the Bash PATH while the plugin is enabled. One-time install of the pinned
+# musubi-harness into the plugin's own environment; see scripts/musubi-claude-setup.
+#
+# The Bash tool does not receive CLAUDE_PLUGIN_DATA (only hooks and MCP servers
+# do), so /musubi-claude:setup passes it as --plugin-data. Refuse rather than
+# guess: without it the install would land in the legacy state dir, where the
+# hooks never look.
+if [ "${1:-}" = "--plugin-data" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "musubi-claude setup: refusing: --plugin-data is empty, so the plugin data directory is unknown. Run /musubi-claude:setup from Claude Code." >&2
+    exit 2
+  fi
+  CLAUDE_PLUGIN_DATA="$2"; export CLAUDE_PLUGIN_DATA; shift 2
+fi
+if [ -z "${CLAUDE_PLUGIN_DATA:-}" ]; then
+  echo "musubi-claude setup: refusing: CLAUDE_PLUGIN_DATA is not set. Run /musubi-claude:setup from Claude Code, or pass --plugin-data <dir>." >&2
+  exit 2
+fi
+exec "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/scripts/musubi-claude-setup" "$@"
