@@ -11,9 +11,10 @@ injection. Reach for it deliberately, before assuming something is unknown.
 1. Use `musubi_recent` for bounded chronology. Recency is not semantic
    relevance — say so when it matters.
 2. Use `musubi_search` when the current subject supplies a real query. Stay
-   within the configured presence scope (the `presence` in this plugin's
-   `config.json`, for example `alice/laptop`) unless a narrower owned namespace
-   is justified.
+   within the configured presence scope (from the plugin's settings in
+   `/config`: actor/seat, for example `alice/laptop`; an existing `config.json`
+   is used only when no actor is set) unless a narrower owned namespace is
+   justified.
 3. Use `musubi_get` to inspect an exact object before relying on an abbreviated
    search hit for anything consequential.
 4. Preserve `object_id`, namespace, plane, score, lifecycle state, and any
