@@ -1,0 +1,190 @@
+{
+  "tools": [
+    {
+      "name": "musubi_recent",
+      "description": "Return bounded recent chronology. This is recency, not semantic relevance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Owned namespace under the configured actor. Defaults to the configured presence."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 5
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "musubi_search",
+      "description": "Semantically search owned Musubi memory and preserve retrieval metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Owned namespace under the configured actor. Defaults to the configured presence."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "deep",
+              "blended"
+            ],
+            "default": "deep"
+          },
+          "planes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "artifact",
+                "concept",
+                "curated",
+                "episodic"
+              ]
+            },
+            "maxItems": 4
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "musubi_get",
+      "description": "Fetch one exact Musubi object by canonical plane, namespace, and object id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plane": {
+            "type": "string",
+            "enum": [
+              "artifact",
+              "concept",
+              "curated",
+              "episodic"
+            ]
+          },
+          "namespace": {
+            "type": "string",
+            "description": "Owned namespace under the configured actor. Defaults to the configured presence."
+          },
+          "object_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "plane",
+          "namespace",
+          "object_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "musubi_remember",
+      "description": "Queue one load-bearing fact, decision, commitment, or relationship memory through the durable verified-delivery outbox. Queued does not mean stored.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 131072
+          },
+          "importance": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 7
+          },
+          "topics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Optional stable caller key for safe tool-call retry."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "content"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "musubi_status",
+      "description": "Read provider health. Supplemental status tool; not one of Musubi's canonical five agent tools.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    }
+  ]
+}
