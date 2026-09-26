@@ -36,16 +36,18 @@ Then, inside Claude Code:
 
 Hooks never install anything. Until setup has run, they refuse visibly: the
 session shows "Musubi memory is not set up yet", and the MCP server reports
-the same.
+the same. When a plugin update raises the required `musubi-harness` version,
+the session says "Musubi memory needs a one-time update" instead, and nothing
+is captured or recalled until you run `/musubi-claude:setup` again.
 
 ## What you get
 
 | | What it does |
 |---|---|
-| **Automatic capture** (Stop hook) | Records each completed primary turn into a local outbox. In `verified` mode it also delivers it to Musubi and reads it back; in `shadow` mode (the default) nothing leaves the machine. |
+| **Automatic capture** (Stop hook) | Records each completed primary turn into a local outbox. In `verified` mode each turn also runs one bounded delivery pass over that outbox, oldest first, and a row counts as delivered only after an exact readback from Musubi; a backlog drains over later turns, and `/musubi-claude:health` shows what is still pending. In `shadow` mode (the default) nothing leaves the machine. |
 | **Session continuity** (SessionStart hook) | A small, labelled block of recent memory at session start. An outage says "unavailable", never "nothing remembered". |
 | **Prompt-aware recall** (UserPromptSubmit hook) | Before Claude answers, your prompt is used as a search and the few memories actually about it are added with their provenance, newest decision first. Superseded memories are dropped. Silent when nothing is relevant; says so when Musubi is unreachable. See [Prompt recall](#prompt-recall). |
-| **Memory survives `/compact`** (PreCompact + SessionStart hooks) | Before compaction, the Musubi objects this session used (ids, plane, state, a short title) and the status of its remembers are checkpointed; after it, they come back as a labelled block, so Claude can `musubi_get` exactly what the summary lost. No conversation text is stored. |
+| **Memory survives `/compact`** (PreCompact + SessionStart hooks) | Before compaction, the Musubi objects this session used (ids, plane, state, a short title) and the status of its remembers are checkpointed; after it, they come back as a labelled block, so Claude can `musubi_get` exactly what the summary lost. The checkpoint is a local file (0600, pruned after 7 days) holding ids, plane, state and an 80-character title per memory; for a captured turn the title is the start of that stored turn ("User: …"), so it can hold a few words of past conversation. |
 | **Live thoughts** (plugin monitor) | Thoughts from the agents you choose arrive in the session as they are sent. See [Live thoughts](#live-thoughts-from-other-agents). |
 | **Recall tools** (MCP) | `musubi_search`, `musubi_recent`, `musubi_get`, `musubi_status` (read-only) and `musubi_remember` (queues one memory). Recalled text is treated as data, never instructions. `queued` is never reported as stored. |
 | **`/musubi-claude:recall <topic>`** | Search with provenance (object id, plane, state, score); says when memories disagree instead of trusting the top hit. |
