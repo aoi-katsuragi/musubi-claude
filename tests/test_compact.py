@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from scripts import musubi_claude_compact as compact
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +19,10 @@ PREFIX = "mcp__plugin_musubi-claude_musubi-claude__"
 SECRET_PROSE = "the user's private conversation text that must not be checkpointed"
 
 
-def write_transcript(path: Path, *, extra_rows: int = 0) -> Path:
+def write_transcript(path: Path, *, extra_rows: int = 0, wrapped: bool = False) -> Path:
+    """``wrapped``: Claude Code records a tool's structuredContent, which the
+    harness facade shapes as {"result": payload} (seen live 2026-09-26)."""
+    wrap = (lambda p: {"result": p}) if wrapped else (lambda p: p)
     search = {
         "query": "uploader backoff",
         "results": [
@@ -48,7 +53,7 @@ def write_transcript(path: Path, *, extra_rows: int = 0) -> Path:
             "type": "user",
             "message": {
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": json.dumps(search)}]},
+                    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": json.dumps(wrap(search))}]},
                 ]
             },
         },
@@ -65,7 +70,7 @@ def write_transcript(path: Path, *, extra_rows: int = 0) -> Path:
             "type": "user",
             "message": {
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "t2", "content": json.dumps(remember)},
+                    {"type": "tool_result", "tool_use_id": "t2", "content": json.dumps(wrap(remember))},
                     {"type": "tool_result", "tool_use_id": "t3", "content": json.dumps({"object_id": "not-musubi"})},
                 ]
             },
@@ -76,8 +81,9 @@ def write_transcript(path: Path, *, extra_rows: int = 0) -> Path:
     return path
 
 
-def test_checkpoint_keeps_memory_references_and_remembers_only(tmp_path: Path) -> None:
-    transcript = write_transcript(tmp_path / "t.jsonl")
+@pytest.mark.parametrize("wrapped", [False, True], ids=["text", "structured"])
+def test_checkpoint_keeps_memory_references_and_remembers_only(tmp_path: Path, wrapped: bool) -> None:
+    transcript = write_transcript(tmp_path / "t.jsonl", wrapped=wrapped)
     env = {"CLAUDE_PLUGIN_DATA": str(tmp_path / "pd")}
     status = compact.checkpoint({"session_id": "s-1", "transcript_path": str(transcript), "trigger": "auto"}, env)
     assert status == "saved"

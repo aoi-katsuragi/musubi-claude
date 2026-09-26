@@ -138,13 +138,19 @@ def collect(transcript: Path) -> dict[str, Any]:
                     continue
                 if not isinstance(payload, dict):
                     continue
+                # The transcript records the tool's structuredContent, which the
+                # harness facade shapes as {"result": payload}; the text content
+                # is the bare payload. Accept both.
+                inner = payload.get("result")
+                if isinstance(inner, dict) and "results" not in payload and "object_id" not in payload:
+                    payload = inner
                 if tool == "musubi_remember":
                     remembers.append({key: payload.get(key) for key in ("status", "event_id", "object_id") if payload.get(key) is not None})
                     continue
                 if tool not in RECALL_TOOLS:
                     continue
                 rows = payload.get("results")
-                rows = rows if isinstance(rows, list) else [payload.get("result", payload)]
+                rows = rows if isinstance(rows, list) else [payload]
                 for row in rows:
                     if not isinstance(row, dict) or not isinstance(row.get("object_id"), str):
                         continue
