@@ -55,6 +55,13 @@ CONFIG_WAIT_SECONDS = 15.0
 _OPTION = "CLAUDE_PLUGIN_OPTION_"
 _PRINT_LOCK = threading.Lock()
 _PRESENCE = re.compile(r"^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$")
+_OBJECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# C0/C1 controls, line/paragraph separators and bidi overrides: anything that
+# could break the one-line notification or disguise what it says.
+_CONTROLS = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+MAX_LINE_BYTES = 16 * 1024
+MAX_EVENT_BYTES = 64 * 1024
+_OVERLONG = "\x00overlong\n"
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -95,20 +102,26 @@ def parse_events(lines: Iterable[str]) -> Iterator[dict[str, str]]:
     """Minimal SSE parser: yields {'event','id','data'} per dispatched event."""
     event: dict[str, str] = {}
     data: list[str] = []
+    size = 0
     for raw in lines:
         line = raw.rstrip("\r\n")
         if not line:
-            if data:
+            if data and size <= MAX_EVENT_BYTES:
                 event["data"] = "\n".join(data)
                 yield event
-            event, data = {}, []
+            event, data, size = {}, [], 0
             continue
         if line.startswith(":"):
+            continue
+        if raw == _OVERLONG:
+            size = MAX_EVENT_BYTES + 1
             continue
         field, _, value = line.partition(":")
         value = value[1:] if value.startswith(" ") else value
         if field == "data":
-            data.append(value)
+            size += len(value) + 1
+            if size <= MAX_EVENT_BYTES:  # an oversized event is dropped whole
+                data.append(value)
         elif field in ("event", "id"):
             event[field] = value
 
@@ -123,21 +136,36 @@ def format_thought(event: dict[str, str], own_presence: str | None) -> str | Non
         return None
     if not isinstance(thought, dict):
         return None
-    sender = str(thought.get("from_presence") or "unknown")
+    sender = thought.get("from_presence")
+    if not isinstance(sender, str) or not _PRESENCE.fullmatch(sender):
+        return None  # a sender we cannot print safely is not shown at all
     if own_presence and sender == own_presence:
         return None  # our own outgoing thought echoed back
-    text = " ".join(str(thought.get("content") or "").split())
+    text = " ".join(_CONTROLS.sub(" ", str(thought.get("content") or "")).split())
     if not text:
         return None
     if len(text) > TEXT_CHARS:
         text = text[: TEXT_CHARS - 1] + "…"
-    thought_id = str(thought.get("object_id") or event.get("id") or "?")
+    thought_id = next(
+        (c for c in (thought.get("object_id"), event.get("id")) if isinstance(c, str) and _OBJECT_ID.fullmatch(c)),
+        "?",
+    )
     return f"musubi thought from {sender} [{thought_id}] (untrusted data): {text}"
 
 
 def _lines(response: Any) -> Iterator[str]:
-    for raw in response:
-        yield raw.decode("utf-8", errors="replace")
+    """Lines of at most MAX_LINE_BYTES; the rest of an overlong line is discarded."""
+    overlong = False
+    while True:
+        raw = response.readline(MAX_LINE_BYTES)
+        if not raw:
+            return
+        complete = raw.endswith(b"\n")
+        if not overlong:
+            # A truncated line poisons the event it belongs to rather than
+            # letting a partial field through.
+            yield raw.decode("utf-8", errors="replace") if complete else _OVERLONG
+        overlong = not complete
 
 
 def wait_for_config(path: Path, *, wait: float = CONFIG_WAIT_SECONDS, sleep: Any = time.sleep) -> dict[str, Any] | None:

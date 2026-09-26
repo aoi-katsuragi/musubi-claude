@@ -9,7 +9,8 @@
         "CLAUDE_PLUGIN_OPTION_DELIVERY_MODE": "${user_config.delivery_mode}",
         "CLAUDE_PLUGIN_OPTION_MUSUBI_URL": "${user_config.musubi_url}",
         "CLAUDE_PLUGIN_OPTION_MUSUBI_TOKEN": "${user_config.musubi_token}",
-        "CLAUDE_PLUGIN_OPTION_PROMPT_RECALL": "${user_config.prompt_recall}"
+        "CLAUDE_PLUGIN_OPTION_PROMPT_RECALL": "${user_config.prompt_recall}",
+        "CLAUDE_PLUGIN_OPTION_THOUGHT_SOURCES": "${user_config.thought_sources}"
       },
       "args": [
         "mcp"
