@@ -1,0 +1,9 @@
+#!/bin/sh
+# On the Bash PATH while the plugin is enabled. The Bash tool does not receive
+# CLAUDE_PLUGIN_DATA (only hooks and MCP servers do), so the skill passes it as
+# --plugin-data; without it this would fall back to the legacy state dir and
+# disagree with what the hooks use.
+if [ "${1:-}" = "--plugin-data" ] && [ -n "${2:-}" ]; then
+  CLAUDE_PLUGIN_DATA="$2"; export CLAUDE_PLUGIN_DATA; shift 2
+fi
+exec "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/scripts/musubi-claude-run" health "$@"

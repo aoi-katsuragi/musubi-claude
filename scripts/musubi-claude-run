@@ -13,12 +13,13 @@
 set -u
 component="${1:-}"
 case "$component" in
-  stop|session-start|mcp) ;;
+  stop|session-start|mcp|health) ;;
   *) echo "musubi-claude-run: unknown component '$component'" >&2; exit 2 ;;
 esac
 root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 data="${CLAUDE_PLUGIN_DATA:-$HOME/.local/state/musubi-claude}"
 script="$root/scripts/musubi-claude-$component"
+shift
 
 python=""
 if [ -x "$data/venv/bin/python" ]; then
@@ -28,7 +29,14 @@ elif command -v python3 >/dev/null 2>&1 && python3 -c "import musubi_harness" >/
 fi
 
 if [ -n "$python" ]; then
-  exec "$python" "$script"
+  exec "$python" "$script" "$@"
+fi
+
+# Not set up. The health report says so as data and records nothing (it is a
+# read-only question, not a failed capture).
+if [ "$component" = health ]; then
+  printf '%s\n' '{"setup": false, "error": "harness_unavailable", "fix": "run /musubi-claude:setup"}'
+  exit 0
 fi
 
 # Not set up. Record it the same way other degradations are recorded, without
