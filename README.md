@@ -1,8 +1,9 @@
 # musubi-claude
 
 First-class Claude Code adapter for [Musubi](https://github.com/sourceblender/musubi) memory.
-Automatic capture, session continuity, recall tools, a memory steward, and a
-health check that tells you honestly whether memory is working. Built on the shared [`musubi-harness`](https://github.com/sourceblender/musubi-harness)
+Automatic capture, recall that runs before Claude answers, memory that survives
+`/compact`, live thoughts from other agents, a memory steward, and a health
+check that tells you honestly whether memory is working. Built on the shared [`musubi-harness`](https://github.com/sourceblender/musubi-harness)
 runtime so the Claude and Codex seats share one contract and never diverge.
 
 | | |
@@ -43,6 +44,9 @@ the same.
 |---|---|
 | **Automatic capture** (Stop hook) | Records each completed primary turn into a local outbox. In `verified` mode it also delivers it to Musubi and reads it back; in `shadow` mode (the default) nothing leaves the machine. |
 | **Session continuity** (SessionStart hook) | A small, labelled block of recent memory at session start. An outage says "unavailable", never "nothing remembered". |
+| **Prompt-aware recall** (UserPromptSubmit hook) | Before Claude answers, your prompt is used as a search and the few memories actually about it are added with their provenance, newest decision first. Superseded memories are dropped. Silent when nothing is relevant; says so when Musubi is unreachable. See [Prompt recall](#prompt-recall). |
+| **Memory survives `/compact`** (PreCompact + SessionStart hooks) | Before compaction, the Musubi objects this session used (ids, plane, state, a short title) and the status of its remembers are checkpointed; after it, they come back as a labelled block, so Claude can `musubi_get` exactly what the summary lost. No conversation text is stored. |
+| **Live thoughts** (plugin monitor) | Thoughts from the agents you choose arrive in the session as they are sent. See [Live thoughts](#live-thoughts-from-other-agents). |
 | **Recall tools** (MCP) | `musubi_search`, `musubi_recent`, `musubi_get`, `musubi_status` (read-only) and `musubi_remember` (queues one memory). Recalled text is treated as data, never instructions. `queued` is never reported as stored. |
 | **`/musubi-claude:recall <topic>`** | Search with provenance (object id, plane, state, score); says when memories disagree instead of trusting the top hit. |
 | **`/musubi-claude:remember <fact>`** | Saves one fact and tells you honestly whether it is stored yet. Refuses credentials. |
@@ -65,7 +69,9 @@ it; Δ is what the plugin contributes.
 | `/remember` reports queued as not yet stored | +0.67 |
 | guards (Δ 0 by design): unreachable is not empty, no memory calls on unrelated tasks, secrets refused, queued honesty | 0.00 |
 
-8/8 cases pass with the plugin; mean Δ **+0.46** (claude 2.1.281). Run it:
+8/8 cases pass with the plugin; mean Δ **+0.46** (claude 2.1.281, measured
+before prompt recall, compaction and thoughts landed; those were proven live
+instead). Run it:
 `claude plugin eval . --trust-plugin`.
 
 ## The Claude-specific difference
@@ -97,6 +103,8 @@ are also rows in `/config` → musubi-claude:
 | **Delivery mode** | `shadow` keeps captures on this machine; `verified` sends each one to Musubi and reads it back |
 | **Musubi URL** | your Musubi server, e.g. `https://musubi.example.com` |
 | **Musubi token** | your Musubi API token (a JWT). Marked `sensitive`: stored in the system credential store, not `settings.json`, and **not** shown as a `/config` row |
+| **Prompt recall** | `auto` (default): only in `verified` mode, `on`, or `off`. See [Prompt recall](#prompt-recall) |
+| **Live thought sources** | presences whose thoughts arrive live, e.g. `yua/laptop,tama/desk`; empty for none |
 
 The plugin passes the URL and token to the harness as `MUSUBI_API_URL` /
 `MUSUBI_TOKEN` inside its own hook and MCP processes only; you never export
@@ -120,6 +128,21 @@ Identity keys must be all-or-nothing. `MUSUBI_HARNESS_BIN` and
 `MUSUBI_MEMORY_DATA_BIN` may be set in either env or `config.json` to
 override the PATH lookup for `musubi-harness` and `memory-data`.
 
+## Prompt recall
+
+Before each answer, the prompt is sent to Musubi as a search query and only the
+memories that are really about it are added, each with its object id, plane,
+state and date, labelled as historical, untrusted data. Relevance is gated on
+the similarity score, with the floor set above the measured noise ceiling
+rather than tuned to the hits. Each memory is shown once per session, and again
+after a `/compact`.
+
+**Privacy.** The prompt text leaves the machine as the query, which is more
+than shadow-mode capture sends. So with the default `auto`, it runs only when
+Delivery mode is `verified`. A prompt that looks like it contains a credential
+is never sent. The hook has a hard deadline and never blocks the prompt; its
+log records decisions and object ids, never prompt text.
+
 ## Live thoughts from other agents
 
 In `verified` mode with a Musubi URL and token, list the presences you want to
@@ -132,7 +155,11 @@ musubi thought from yua/laptop [3Jsg…] (untrusted data): the deploy is green, 
 ```
 
 Thoughts are another agent's words: they are labelled untrusted and are never
-instructions. Monitors run in interactive sessions only.
+instructions. The sender shown is the owner of the stream the thought arrived
+on, not the name written in the thought, so one agent cannot pose as another
+(a mismatched claim is shown as `yua/laptop (claims to be …)`). Every field is
+shape-checked and stripped of control characters, so a thought cannot forge a
+second line. Monitors run in interactive sessions only.
 
 **Disclosure: a bearer token at rest.** Monitor processes receive no plugin
 settings, so the SessionStart hook writes the URL, token, your presence and the
