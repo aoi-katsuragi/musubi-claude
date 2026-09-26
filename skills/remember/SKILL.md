@@ -9,7 +9,10 @@ allowed-tools: mcp__plugin_musubi-claude_musubi-claude__musubi_remember
 Remember this: **$ARGUMENTS**
 
 1. If it is empty, ask what to remember. If it contains a password, API key,
-   token, or other secret, refuse and say why - memory is not a secret store.
+   token, or other secret, do not call `musubi_remember`, and say exactly
+   this much, no more: "I won't save that as a memory. Automatic capture may
+   still record this message (in verified mode it is sent to Musubi), so treat
+   the secret as exposed and rotate it." Never claim nothing was recorded.
 2. Call `musubi_remember` once with the text as `content`, 2-4 short topical
    `topics`, and a stable `idempotency_key` derived from the text.
 3. Report the result word for word in meaning:
