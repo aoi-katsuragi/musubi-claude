@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -36,7 +37,23 @@ MAX_REMEMBERS = 10
 TITLE_CHARS = 80
 RESTORE_BUDGET = 2_000  # characters; far under the 10,000 hook cap
 KEEP_SECONDS = 7 * 24 * 3600
-MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+# Long sessions are the ones that compact, so a large transcript is read, never
+# refused. With the byte prefilter in collect() a 176 MB transcript scans in
+# about 0.2 s (measured 2026-09-26), so the window is a bound for pathological
+# files, not a routine cut: a 64 MB tail dropped a real session's only results.
+TAIL_BYTES = 1024 * 1024 * 1024
+_ID = re.compile(r"[A-Za-z0-9_:.-]{1,128}")
+_WORD = re.compile(r"[a-z_]{1,24}")
+# C0/C1 controls, line/paragraph separators and bidi overrides.
+_CONTROLS = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+
+
+def _field(value: Any, pattern: re.Pattern[str]) -> str:
+    return value if isinstance(value, str) and pattern.fullmatch(value) else "?"
+
+
+def _clean(text: Any) -> str:
+    return " ".join(_CONTROLS.sub(" ", str(text or "")).split())
 
 
 def _data_dir(env: dict[str, str] | None = None, root: Path | None = None) -> Path | None:
@@ -98,7 +115,7 @@ def _result_text(block: dict[str, Any]) -> str:
 
 def _title(row: dict[str, Any]) -> str:
     text = row.get("title") or row.get("summary") or row.get("content") or ""
-    text = " ".join(str(text).split())
+    text = _clean(text)
     return text if len(text) <= TITLE_CHARS else text[: TITLE_CHARS - 1] + "…"
 
 
@@ -107,12 +124,19 @@ def collect(transcript: Path) -> dict[str, Any]:
     names: dict[str, str] = {}
     items: dict[str, dict[str, Any]] = {}
     remembers: list[dict[str, Any]] = []
-    if transcript.stat().st_size > MAX_TRANSCRIPT_BYTES:
-        raise ValueError("transcript_too_large")
-    with open(transcript, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
+    with open(transcript, "rb") as handle:
+        start = max(0, transcript.stat().st_size - TAIL_BYTES)
+        if start:
+            handle.seek(start - 1)
+            if handle.read(1) != b"\n":
+                handle.readline()  # the first line in the window is partial
+        for raw in handle:
+            # Most lines are conversation text; only tool traffic is parsed. A
+            # tool_result whose tool_use sits before the window is skipped.
+            if b'"tool_' not in raw:
+                continue
             try:
-                record = json.loads(line)
+                record = json.loads(raw.decode("utf-8", errors="replace"))
             except json.JSONDecodeError:
                 continue
             message = record.get("message") if isinstance(record, dict) else None
@@ -188,10 +212,11 @@ def checkpoint(hook: dict[str, Any], env: dict[str, str] | None = None, root: Pa
         return "empty"
     folder = data / "compact"
     try:
-        folder.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         target = folder / f"{session}.json"
         tmp = folder / f".{session}.json.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        tmp.unlink(missing_ok=True)  # a leftover would keep its old mode under O_TRUNC
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump({"saved_at": int(time.time()), "trigger": hook.get("trigger"), **found}, handle)
         os.replace(tmp, target)
@@ -222,7 +247,10 @@ def render(saved: dict[str, Any]) -> str:
     used = len(head)
     dropped = 0
     for item in reversed(saved.get("items", [])):  # most recent first
-        line = f"- [{item.get('plane') or '?'}/{item.get('state') or '?'}] {item.get('object_id')}: {item.get('title') or ''}"
+        line = (
+            f"- [{_field(item.get('plane'), _WORD)}/{_field(item.get('state'), _WORD)}] "
+            f"{_field(item.get('object_id'), _ID)}: {_clean(item.get('title'))[:TITLE_CHARS]}"
+        )
         if used + len(line) + 1 > RESTORE_BUDGET - 200:
             dropped += 1
             continue
@@ -230,11 +258,10 @@ def render(saved: dict[str, Any]) -> str:
         used += len(line) + 1
     remembers = saved.get("remembers", [])
     if remembers:
-        lines.append("Explicit remembers this session (queued is not stored; only verified is):")
+        lines.append("Explicit remembers this session, status as of compaction (queued is not stored; only verified is):")
         for r in remembers[-5:]:
-            status = r.get("status", "?")
-            suffix = f" -> {r['object_id']}" if r.get("object_id") else ""
-            lines.append(f"- {r.get('event_id')}: {status}{suffix}")
+            suffix = f" -> {_field(r.get('object_id'), _ID)}" if r.get("object_id") else ""
+            lines.append(f"- {_field(r.get('event_id'), _ID)}: {_field(r.get('status'), _WORD)}{suffix}")
     if dropped:
         lines.append(f"({dropped} older memory reference(s) omitted to stay within budget.)")
     return "\n".join(lines)[:RESTORE_BUDGET]
