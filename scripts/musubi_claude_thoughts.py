@@ -126,8 +126,15 @@ def parse_events(lines: Iterable[str]) -> Iterator[dict[str, str]]:
             event[field] = value
 
 
-def format_thought(event: dict[str, str], own_presence: str | None) -> str | None:
-    """One notification line for a thought event, or None to stay quiet."""
+def format_thought(event: dict[str, str], own_presence: str | None, stream_presence: str | None = None) -> str | None:
+    """One notification line for a thought event, or None to stay quiet.
+
+    ``stream_presence`` is the owner of the namespace the event arrived on.
+    Musubi takes ``from_presence`` from the request body and checks only the
+    writer's scope on the namespace, so the namespace is the authority: a thought
+    on ``yua/laptop/thought`` is from yua/laptop whatever it claims, and a
+    different claim is shown as a claim.
+    """
     if event.get("event", "message") != "thought":
         return None
     try:
@@ -136,11 +143,15 @@ def format_thought(event: dict[str, str], own_presence: str | None) -> str | Non
         return None
     if not isinstance(thought, dict):
         return None
-    sender = thought.get("from_presence")
-    if not isinstance(sender, str) or not _PRESENCE.fullmatch(sender):
+    claimed = thought.get("from_presence")
+    claimed = claimed if isinstance(claimed, str) and _PRESENCE.fullmatch(claimed) else None
+    sender = stream_presence or claimed
+    if sender is None:
         return None  # a sender we cannot print safely is not shown at all
     if own_presence and sender == own_presence:
         return None  # our own outgoing thought echoed back
+    if claimed != sender:
+        sender += f" (claims to be {claimed})" if claimed else " (sender field invalid)"
     text = " ".join(_CONTROLS.sub(" ", str(thought.get("content") or "")).split())
     if not text:
         return None
@@ -208,6 +219,7 @@ def run_one(config: dict[str, Any], namespace: str, *, max_cycles: int | None = 
     announced_down = False
     cycles = 0
     url = stream_url(config, namespace)
+    owner = namespace.removesuffix("/thought") if _PRESENCE.fullmatch(namespace.removesuffix("/thought")) else None
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
         headers = {"Accept": "text/event-stream", "Authorization": f"Bearer {config['token']}"}
@@ -222,7 +234,7 @@ def run_one(config: dict[str, Any], namespace: str, *, max_cycles: int | None = 
                 for event in parse_events(_lines(response)):
                     if event.get("id"):
                         last_id = event["id"]
-                    line = format_thought(event, config.get("presence"))
+                    line = format_thought(event, config.get("presence"), owner)
                     if line:
                         _emit(line)
         except urllib.error.HTTPError as exc:
