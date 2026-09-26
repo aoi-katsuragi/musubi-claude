@@ -39,6 +39,7 @@ from musubi_claude_runtime import (
     harness_bin,
     memory_data_bin,
     plugin_config,
+    local_tool_environment,
     runtime_config,
     tool_environment,
 )
@@ -314,11 +315,15 @@ def _harness() -> str:
 
 def delivery_commands(
     envelope: dict[str, Any], configured: RuntimeConfig
-) -> list[tuple[list[str], int]]:
+) -> list[tuple[list[str], int, bool]]:
     """Shadow mode → no remote delivery. Verified mode → stage the just-enqueued event and
     run ONE bounded shared-drainer pass. The drainer owns the durable receipt + exact
     readback; this adapter never POSTs Musubi directly and never treats a queued row as
-    verified. Same wiring as the Codex seat — separate outbox, identical contract."""
+    verified. Same wiring as the Codex seat — separate outbox, identical contract.
+
+    Each entry is (argv, timeout, remote). ``remote`` says whether the command talks
+    to Musubi and so receives the credentials; it is declared here, beside the
+    command, rather than inferred from argv positions (Aoi's review)."""
     if configured.delivery_mode == "shadow":
         return []
     db = _data_root() / envelope["actor"] / envelope["zone"] / "shadow.db"
@@ -326,7 +331,7 @@ def delivery_commands(
     memory_data = memory_data_bin(configured)
     owner = f"{envelope['actor']}-{envelope['zone']}-claude-stop"
     return [
-        ([harness, "--db", str(db), "stage", "--event-id", envelope["event_id"]], 5),
+        ([harness, "--db", str(db), "stage", "--event-id", envelope["event_id"]], 5, False),
         (
             [
                 harness,
@@ -342,6 +347,7 @@ def delivery_commands(
                 "5",
             ],
             15,
+            True,
         ),
     ]
 
@@ -405,6 +411,8 @@ def main() -> int:
             capture_output=True,
             timeout=8,
             check=False,
+            # A local outbox write: identity, but no Musubi credentials.
+            env=local_tool_environment(configured),
         )
         if result.returncode != 0:
             # Stable code + exit status ONLY. The child's stdout/stderr can echo the
@@ -417,11 +425,14 @@ def main() -> int:
         # env MUST carry the configured identity: the drainer's MemoryDataClient otherwise
         # inherits ambient env, and a Stop hook runs at an arbitrary cwd where FLEET_IDENTITY/
         # FLEET_PRESENCE are absent — the write would refuse or resolve identity from cwd.
-        delivery_env = tool_environment(configured)
-        for command, timeout in delivery_commands(envelope, configured):
+        # Only the drain talks to Musubi, so only the drain gets the credentials;
+        # stage is a local outbox transition like enqueue.
+        remote_env = tool_environment(configured)
+        local_env = local_tool_environment(configured)
+        for command, timeout, remote in delivery_commands(envelope, configured):
             result = subprocess.run(
                 command, text=True, capture_output=True, timeout=timeout, check=False,
-                env=delivery_env,
+                env=remote_env if remote else local_env,
             )
             if result.returncode != 0:
                 # Same invariant as the enqueue path: exit code is diagnosis, output is content.
