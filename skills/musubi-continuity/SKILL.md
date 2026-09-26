@@ -26,7 +26,11 @@ memory in the store.
    the report with `--event <event_id>` (the id from the `musubi_remember`
    result) and say only what that one record proves: `verified` with an
    `object_id` is stored; anything else is not yet — one record, one truthful
-   answer.
+   answer. In `shadow` mode an explicit remember shows `state: pending` and
+   stays there: it is not sent, by design, not lost. If Delivery mode is later
+   switched to `verified`, pending remembers become eligible and will be sent
+   to Musubi. `found: false` means only that no record with that id is in this
+   outbox.
 4. Read `degraded` for the most recent reasons and time. These are turns that
    were not captured; report the reason without exposing captured content.
    If `other_root.undelivered` > 0, say plainly that those records sit in a
