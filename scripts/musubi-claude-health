@@ -152,11 +152,19 @@ def report(probe: bool) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--probe", action="store_true", help="also make one bounded provider status call")
-    args = parser.parse_args(argv)
+    # Arguments come from a user's free-text /musubi-claude:health line, and an
+    # argparse exit would abort the skill. Accept "probe" without dashes and
+    # report anything else instead of failing on it.
+    args, extra = parser.parse_known_args(argv)
+    if "probe" in extra:
+        args.probe = True
+        extra = [item for item in extra if item != "probe"]
     try:
         payload = report(args.probe)
     except Exception as exc:  # noqa: BLE001 - health must report, never abort the skill
         payload = {"error": f"health_failed: {type(exc).__name__}: {str(exc)[:200]}"}
+    if extra:
+        payload["ignored_args"] = extra[:10]
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

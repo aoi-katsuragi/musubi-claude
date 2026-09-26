@@ -139,3 +139,39 @@ def test_bin_wrapper_passes_plugin_data_through(tmp_path: Path) -> None:
     # legacy default instead: the launcher only reports, it does not write.
     assert json.loads(done.stdout)["setup"] is False
     assert not (tmp_path / ".local").exists()
+
+
+def test_free_text_arguments_never_abort_the_skill(tmp_path: Path) -> None:
+    data = tmp_path / "plugin-data"
+    report, _ = run_health(tmp_path, data, "probe", "please", "--verbose")
+    assert report["ignored_args"] == ["please", "--verbose"]
+    assert "provider" in report or report["identity"]["ok"] is True
+
+
+def test_empty_plugin_data_is_reported_not_guessed(tmp_path: Path) -> None:
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    done = subprocess.run(
+        ["sh", str(ROOT / "bin" / "musubi-claude-health"), "--plugin-data", ""],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert done.returncode == 0
+    assert json.loads(done.stdout)["error"] == "plugin_data_unknown"
+
+
+def test_setup_refuses_without_a_plugin_data_dir(tmp_path: Path) -> None:
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    for args in (["--plugin-data", ""], []):
+        done = subprocess.run(
+            ["sh", str(ROOT / "bin" / "musubi-claude-setup"), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        assert done.returncode == 2, args
+        assert "refusing" in done.stderr
+    # Nothing was installed anywhere, in particular not in the legacy root.
+    assert not (tmp_path / ".local").exists()
