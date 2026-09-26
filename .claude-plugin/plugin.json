@@ -74,6 +74,12 @@
         "off"
       ],
       "default": "auto"
+    },
+    "thought_sources": {
+      "type": "string",
+      "title": "Live thought sources",
+      "description": "Comma-separated presences whose thoughts to your presence should arrive live in the session (verified mode with a Musubi URL and token), e.g. yua/laptop,tama/desk. Leave empty for no live feed.",
+      "default": ""
     }
   }
 }

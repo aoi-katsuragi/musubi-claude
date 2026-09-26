@@ -15,7 +15,7 @@
 set -u
 component="${1:-}"
 case "$component" in
-  stop|session-start|mcp|health|prompt) ;;
+  stop|session-start|mcp|health|prompt|thoughts) ;;
   *) echo "musubi-claude-run: unknown component '$component'" >&2; exit 2 ;;
 esac
 root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"

@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Launcher entry for the live-thoughts hooks (see musubi_claude_thoughts.py)."""
+
+from musubi_claude_thoughts import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

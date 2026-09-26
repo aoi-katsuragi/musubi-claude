@@ -9,6 +9,15 @@
             "timeout": 7
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/scripts/musubi-claude-run\" thoughts --write-config",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [
@@ -18,6 +27,17 @@
             "type": "command",
             "command": "\"$CLAUDE_PLUGIN_ROOT/scripts/musubi-claude-run\" stop",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/scripts/musubi-claude-run\" thoughts --remove-config",
+            "timeout": 5
           }
         ]
       }
