@@ -93,7 +93,7 @@ def test_a_venv_without_the_harness_counts_as_not_set_up(tmp_path: Path) -> None
 # Aoi, 2026-09-26: after a plugin update raised the pin, a venv left by an
 # earlier setup still had musubi-harness 1.0.1, and every entry point died on
 # import with an AttributeError traceback and no hint.
-@pytest.mark.parametrize("old", ["1.0.1", "1.0.99", "1.1.0rc1"])
+@pytest.mark.parametrize("old", ["1.0.1", "1.0.99", "1.1.0rc1", "1.1.0"])
 def test_an_outdated_harness_is_refused_visibly_on_every_entry_point(tmp_path: Path, old: str) -> None:
     data = tmp_path / "plugin-data"
     fake_venv(data, old)
