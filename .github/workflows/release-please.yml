@@ -16,11 +16,13 @@ jobs:
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: python
-          package-name: musubi-claude
+          # Versioned files are declared in release-please-config.json, so the
+          # plugin.json version Claude Code reads moves with every release.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   # Note: this plugin ships as a Claude Code plugin (directory), not as
   # a pip-installable wheel. Users install it via the marketplace, not
-  # via `pip install musubi-claude`. The release-please job bumps
-  # `plugin.json` and the marketplace entry version; merging the
-  # release-please PR cuts a GitHub Release for the new plugin version.
+  # via `pip install musubi-claude`. The release-please PR bumps
+  # pyproject.toml and .claude-plugin/plugin.json (release-please-config.json
+  # extra-files); merging it cuts a GitHub Release for the new plugin version.
