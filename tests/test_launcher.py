@@ -55,7 +55,8 @@ def test_mcp_without_setup_fails_visibly(tmp_path: Path) -> None:
     assert result.returncode == 1 and "musubi-claude:setup" in result.stderr
 
 
-REQUIRED = (ROOT / "scripts" / "harness-requirement").read_text().strip().removeprefix("musubi-harness==")
+REQUIRED = (ROOT / "scripts" / "harness-minimum").read_text().strip().removeprefix("musubi-harness>=")
+INSTALLS = (ROOT / "scripts" / "harness-requirement").read_text().strip().removeprefix("musubi-harness==")
 
 
 def fake_venv(data: Path, harness_version: str | None) -> None:
@@ -93,7 +94,7 @@ def test_a_venv_without_the_harness_counts_as_not_set_up(tmp_path: Path) -> None
 # Aoi, 2026-09-26: after a plugin update raised the pin, a venv left by an
 # earlier setup still had musubi-harness 1.0.1, and every entry point died on
 # import with an AttributeError traceback and no hint.
-@pytest.mark.parametrize("old", ["1.0.1", "1.0.99", "1.1.0rc1", "1.1.0", "1.1.1"])
+@pytest.mark.parametrize("old", ["1.0.1", "1.0.99", "1.1.0rc1", "1.1.0"])
 def test_an_outdated_harness_is_refused_visibly_on_every_entry_point(tmp_path: Path, old: str) -> None:
     data = tmp_path / "plugin-data"
     fake_venv(data, old)
@@ -182,3 +183,21 @@ def test_a_data_path_with_spaces_still_finds_the_harness(tmp_path: Path, with_cf
         fake_venv(data, REQUIRED)
     result = run("stop", data)
     assert result.stdout.startswith("ran ") and not (data / "degraded.jsonl").exists()
+
+
+def _parts(version: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in version.split("."))
+
+
+def test_the_gate_minimum_never_exceeds_what_setup_installs() -> None:
+    # A minimum above the pin would refuse the harness setup just installed.
+    assert _parts(REQUIRED) <= _parts(INSTALLS)
+
+
+def test_an_install_at_the_minimum_runs_without_a_second_setup(tmp_path: Path) -> None:
+    # Setup now installs a newer harness (a speed-up), but an install that
+    # already has the minimum keeps working: no forced re-setup.
+    data = tmp_path / "plugin-data"
+    fake_venv(data, REQUIRED)
+    assert run("stop", data).stdout.startswith("ran ")
+    assert "systemMessage" not in run("session-start", data).stdout
