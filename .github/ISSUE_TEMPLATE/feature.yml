@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a change to the Claude Code adapter for Musubi memory.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `musubi-claude` is intentionally narrow — it's one host
+        binding for one harness. Before proposing an addition, please
+        confirm the change belongs in this adapter (Claude Code
+        host-specific) rather than in the shared harness or another
+        adapter.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+
+  - type: textarea
+    id: belongs-here
+    attributes:
+      label: Why does this belong in the Claude adapter specifically?
+      description: |
+        If the change is host-neutral, it belongs in
+        `musubi-harness`, not here. If it benefits other host
+        adapters (Codex, LiveKit, Hermes, OpenClaw), it almost
+        certainly belongs in the harness too.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contract-impact
+    attributes:
+      label: Contract impact
+      description: |
+        Does this change any state name (`shadow`, `pending`,
+        `accepted`, `verified`, `dead`), any tool schema, the recall
+        policy, the continuity block shape, or the identity model?
+        If yes, every seat adapter is affected.
+    validations:
+      required: true

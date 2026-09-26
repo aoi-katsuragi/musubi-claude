@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Claude protocol binding for the shared Musubi MCP facade.
+
+All five-tool schema, validation, recall reads, and durable-remember truth live in
+``musubi_harness.plugin_mcp.PluginMcpFacade``. This binding supplies only the Claude
+seat's labels — nothing that could let the Claude and Codex memory policies diverge.
+"""
+
+from __future__ import annotations
+
+import subprocess  # re-exported for adapter tests and fault injection
+
+from musubi_claude_runtime import runtime
+from musubi_harness.plugin_mcp import (
+    SERVER_INSTRUCTIONS,
+    PluginMcpFacade,
+    tool_definitions,
+)
+
+
+_facade = PluginMcpFacade(
+    runtime,
+    source="claude-code",
+    event_prefix="claude-code",
+    owner_label="claude-mcp",
+    server_name="musubi-claude",
+)
+
+command_for = _facade.command_for
+remember_command = _facade.remember_command
+call_tool = _facade.call_tool
+response_for = _facade.response_for
+
+
+def main() -> int:
+    return _facade.serve()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sourceblender",
+  "owner": {
+    "name": "Eric Mey",
+    "email": "ericmey@gmail.com",
+    "url": "https://github.com/sourceblender"
+  },
+  "metadata": {
+    "description": "Sourceblender Claude Code plugins"
+  },
+  "plugins": [
+    {
+      "name": "musubi-claude",
+      "source": "./",
+      "description": "First-class Claude Code adapter for Musubi memory: SessionStart continuity, Stop capture, a read-only recall MCP facade plus durable remember, and recall/continuity skills. Shadow-only by default — no remote write until delivery_mode is explicitly set to verified.",
+      "category": "productivity",
+      "keywords": ["musubi", "memory", "agents", "claude-code", "plugin"]
+    }
+  ]
+}

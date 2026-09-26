@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a defect in the musubi-claude Claude Code plugin.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. The plugin is small enough that the
+        most useful reports show the call, the input, the expected
+        output, and what came back.
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: The version field from `.claude-plugin/plugin.json` of your installed copy.
+    validations:
+      required: true
+
+  - type: input
+    id: harness-version
+    attributes:
+      label: musubi-harness version
+      description: The output of `pip show musubi-harness | grep Version`.
+    validations:
+      required: true
+
+  - type: input
+    id: claude-code-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: |
+        Steps, transcript excerpt, hook payload, or anything else
+        that reproduces the defect. You may redact conversation
+        content; the harness intentionally never logs it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: identity-mode
+    attributes:
+      label: Identity mode
+      description: |
+        Env (`MUSUBI_ACTOR` / `MUSUBI_PRESENCE` / `MUSUBI_ZONE`) or
+        `$PLUGIN_DATA/config.json`. Do not paste the values — we need
+        the shape, not the secrets.

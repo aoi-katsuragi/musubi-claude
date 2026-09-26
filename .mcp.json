@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "musubi-claude": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/musubi-claude-mcp"
+    }
+  }
+}

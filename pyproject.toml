@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "musubi-claude"
+version = "0.4.0"
+description = "First-class Claude Code adapter for Musubi memory — Claude Code host binding for the musubi-harness runtime."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+keywords = ["musubi", "memory", "agents", "claude-code", "plugin"]
+authors = [
+    { name = "Eric Mey", email = "ericmey@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    # The shared host-neutral runtime. Pinned to the 1.x line that the
+    # adapter was originally written against inside fleet-tools. A 2.x
+    # bump would be a deliberate breaking change for every adapter, not
+    # this one in isolation.
+    "musubi-harness>=1.0.0,<2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sourceblender/musubi-claude"
+Repository = "https://github.com/sourceblender/musubi-claude"
+Issues = "https://github.com/sourceblender/musubi-claude/issues"
+Harness = "https://github.com/sourceblender/musubi-harness"
+
+# Hatch treats `scripts/` as a Python package directory so that
+# `python -m scripts.musubi_claude_runtime` works in dev. We don't
+# publish a wheel for this project (users install the plugin via
+# Claude Code's marketplace, not via pip), but the package layout
+# makes tests, ruff, and mypy happy.
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "scripts",
+    "skills",
+    "hooks",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+
+[tool.ruff]
+# Same as musubi-harness: long lines are pre-existing in the original
+# adapter source. Refactoring every 105+ character line is out of
+# scope for the extraction PR.
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "UP",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scripts"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+
+[tool.release-please]
+release-type = "python"
+package-name = "musubi-claude"

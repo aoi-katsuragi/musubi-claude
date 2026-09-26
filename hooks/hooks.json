@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/scripts/musubi-claude-session-start\"",
+            "timeout": 7
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT/scripts/musubi-claude-stop\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

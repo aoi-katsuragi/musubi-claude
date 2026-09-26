@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Claude protocol binding for shared bounded Musubi SessionStart continuity.
+
+The bounded, fail-open, owned-scope chronology renderer lives in
+``musubi_harness.plugin_continuity.PluginContinuity``. Claude Code injects this
+hook's stdout as session context; this binding only prints that shared block.
+"""
+
+from __future__ import annotations
+
+import subprocess  # re-exported for adapter tests and fault injection
+
+from musubi_claude_runtime import runtime
+from musubi_harness.plugin_continuity import MAX_CONTENT, MAX_ROWS, PluginContinuity
+
+
+_continuity = PluginContinuity(runtime)
+continuity_block = _continuity.continuity_block
+_rows = _continuity._rows
+_compact = _continuity._compact
+
+
+def main() -> int:
+    print(continuity_block())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

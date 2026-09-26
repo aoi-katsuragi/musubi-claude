@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Claude Code Stop adapter: parse the last completed primary turn and shadow-enqueue it.
+
+Mirrors the musubi-codex adapter's discipline against the shared host-neutral
+contract. THE STOP EVENT IS AUTHORITATIVE for the three facts that decide what is
+stored: `session_id`, `prompt_id`, and `last_assistant_message`. The transcript is
+consulted only to look up that exact prompt's user text and context; it never
+selects a turn and never reconstructs assistant prose.
+
+This adapter previously derived everything from the transcript, on the belief that
+Stop supplied only session_id + transcript_path. That belief was never checked. A
+shape probe over nine consecutive real Stop events found `last_assistant_message`
+non-empty on 9/9 and `prompt_id` present on 9/9. Deriving what the event already
+states cost 5,938 declined turns against 84 accepted (2026-07-17 → 2026-08-12),
+because at Stop time the transcript tail is normally a turn still in flight.
+
+Everything else (env-or-config identity that is never derived from the host,
+visible degradation, always-exit-0) follows the shared pattern.
+
+Always shadow-enqueues locally. In verified delivery_mode it also stages the event
+and runs ONE bounded shared-drainer pass (never a direct Musubi POST); in the default
+shadow mode nothing leaves the disk. Every failure degrades visibly and exits 0 — this
+hook never breaks the session.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from musubi_claude_runtime import (
+    RuntimeConfig,
+    RuntimeConfigError,
+    data_root,
+    harness_bin,
+    memory_data_bin,
+    plugin_config,
+    runtime_config,
+    tool_environment,
+)
+
+
+class AdapterError(ValueError):
+    """A Claude transcript turn could not be safely projected to an envelope."""
+
+
+def _is_prompt_carrier(record: dict[str, Any]) -> bool:
+    """A type=user record that could carry this turn's opening prose.
+
+    Deliberately does NOT judge isMeta. Whether a meta record is discardable metadata or
+    the turn's only voice is not a property of that record — it depends on whether a
+    non-meta sibling exists under the same promptId. That comparison belongs to
+    find_prompt_turn, which is the only place both are in scope.
+    """
+    if record.get("type") != "user":
+        return False
+    content = (record.get("message") or {}).get("content")
+    if isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content
+    ):
+        return False
+    return True
+
+
+def _is_real_prompt(record: dict[str, Any]) -> bool:
+    """A genuine human prompt — not metadata or a type=user tool_result."""
+    # Claude writes hook/system context as a second type=user text record carrying the
+    # SAME promptId as the human prompt, distinguished by isMeta=true. Treating both as
+    # prompts makes the exact-id lookup fail closed as prompt_id_ambiguous on every turn
+    # whose metadata text differs from the human input.
+    if record.get("isMeta") is True:
+        return False
+    return _is_prompt_carrier(record)
+
+
+def _text_blocks(message: dict[str, Any]) -> str:
+    """Join text blocks only — tool_use/tool_result carry no capturable prose."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
+# Bounded reassembly of records split by literal newlines. Optional by design:
+# the marketplace lib is a SEPARATE copy from the vault, so an adapter can ship
+# before the lib does. A bare `except ModuleNotFoundError` would launder a real
+# defect inside the helper as version skew, so match the module name exactly and
+# re-raise anything else. Absent helper -> the already-landed skip behaviour,
+# never a dead hook. (Yua, infra-readiness-20260807; required for split-prompt
+# recovery, cross-review musubi-reassembly-83-20260813.)
+try:
+    from musubi_transcript_jsonl import Corrupt as _Corrupt, iter_records as _iter_records
+except ModuleNotFoundError as _exc:  # pragma: no cover - exercised by tests
+    if _exc.name != "musubi_transcript_jsonl":
+        raise
+    _Corrupt = None
+    _iter_records = None
+
+
+class _SkipMarker:
+    """Fallback sentinel mirroring the helper's Corrupt contract."""
+
+    __slots__ = ("lineno", "reason")
+
+    def __init__(self, lineno: int, reason: str) -> None:
+        self.lineno, self.reason = lineno, reason
+
+
+def _records(lines: list[str]):
+    """Reassembling reader when available; otherwise today's skip semantics."""
+    if _iter_records is not None:
+        return _iter_records(lines)
+    return _skip_only(lines)
+
+
+def _skip_only(lines: list[str]):
+    for idx, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            # Harmless here: a record we cannot read simply cannot match an id. Unlike
+            # positional parsing, skipping it can never bind output to a prior prompt.
+            yield _SkipMarker(idx, "unparseable")
+            continue
+        # VALID JSON that is not an object -- `123`, `"str"`, `[]`, `null`. json.loads
+        # succeeds, so the decode guard above never sees it, and _is_real_prompt would
+        # call .get() on an int and raise AttributeError. main() does not catch that,
+        # so the hook would DIE rather than decline, breaking the session it promises
+        # never to block. A non-object cannot carry a promptId, so skipping is both
+        # safe and complete.
+        if isinstance(record, dict) and "type" in record:
+            yield record
+        else:
+            yield _SkipMarker(idx, "not_a_record")
+
+
+def find_prompt_turn(transcript_path: Path, prompt_id: str) -> dict[str, Any]:
+    """Look up the EXACT prompt this Stop is closing and return its user text + context.
+
+    Selection is by id, never by position, so a turn still in flight further down the
+    transcript is irrelevant and a corrupt line cannot mis-bind a prompt to the wrong
+    turn's output. This function deliberately returns NO assistant prose: the Stop event
+    already carries the final answer, and reconstructing it from the transcript is what
+    produced the false-decline defect this adapter exists to fix. The reader may
+    REASSEMBLE a prompt record split across physical lines; payload authority is
+    unchanged -- the assistant answer still comes only from the Stop event.
+    """
+    try:
+        lines = transcript_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise AdapterError("transcript_unreadable") from exc
+
+    primary: list[dict[str, Any]] = []
+    meta_only: list[dict[str, Any]] = []
+    for record in _records(lines):
+        if not isinstance(record, dict):
+            # Corrupt marker from either reader. Skipping stays safe and complete:
+            # selection is by id, so a span we cannot read simply cannot match.
+            continue
+        if not _is_prompt_carrier(record) or record.get("promptId") != prompt_id:
+            continue
+        candidate = {
+            "prompt_id": prompt_id,
+            "session_id": record.get("sessionId"),  # bound to THIS prompt record
+            "user_text": _text_blocks(record.get("message") or {}),
+            "is_sidechain": bool(record.get("isSidechain")),
+        }
+        (meta_only if record.get("isMeta") is True else primary).append(candidate)
+
+    # A non-meta prompt WINS outright and the meta records under its id are dropped
+    # unread — the 0.3.3 behaviour, unchanged, because injected hook context is not a
+    # second statement by the human and must never make the id ambiguous.
+    #
+    # Falling back to meta matters when there is no such sibling. Claude Code delivers a
+    # NATIVE cross-session message (one agent's SendMessage to another) as a single
+    # isMeta=true user record, and that record is the entire turn's opening prose: no
+    # human prompt exists under its promptId, and the only other records sharing the id
+    # are tool_results. Rejecting it left the Stop hook with nothing to look up, so the
+    # turn declined as prompt_not_found_in_transcript and was never enqueued — no shadow
+    # row, no refuse row, no pending row, no trace of any kind.
+    #
+    # Measured across every transcript on both Claude seats before this changed: 28
+    # promptIds had an isMeta record as their ONLY carrier, and all 28 were native
+    # cross-session messages — no slash-commands, no system-reminders, no empty text. So
+    # the fallback recovers exactly the lost class and admits nothing else. chair-msg and
+    # agent-bridge deliveries were never affected; they already arrive as real prompts.
+    # (Aoi 2026-08-20, from Shiori's disposition-plane finding; she re-derived the same
+    # 28/28 independently from her own transcripts before this landed.)
+    matches = primary or meta_only
+
+    if not matches:
+        # The event names a prompt this transcript does not contain: wrong file, truncated
+        # file, or a rotated session. Storing anything here would attribute real prose to
+        # an unverified prompt.
+        raise AdapterError("prompt_not_found_in_transcript")
+    first = matches[0]
+    if any(other != first for other in matches[1:]):
+        # Identical repeats are fine (replay). Records that DISAGREE about session,
+        # user text, or context mean the id does not uniquely identify a turn.
+        raise AdapterError("prompt_id_ambiguous")
+    if not first["session_id"] or not isinstance(first["session_id"], str):
+        raise AdapterError("session_id_missing")
+    if not first["user_text"].strip():
+        raise AdapterError("primary_user_text_missing")
+    return first
+
+
+def _hook_str(hook: dict[str, Any], *names: str, error: str, conflict: str | None = None) -> str:
+    """Read one non-empty string from `names`, requiring the aliases to AGREE.
+
+    Taking the first alias that happened to be present would let a payload carrying both
+    `prompt_id` and `promptId` with DIFFERENT values decide event identity by key order —
+    the object would be stored under one id while the turn it describes belongs to another.
+    Identical aliases are fine (a producer emitting both spellings); disagreement is not
+    something to resolve by preference, so it fails closed.
+    """
+    found: list[str] = []
+    for name in names:
+        value = hook.get(name)
+        if isinstance(value, str) and value.strip() and value not in found:
+            found.append(value)
+    if not found:
+        raise AdapterError(error)
+    if len(found) > 1:
+        raise AdapterError(conflict or f"{error}_conflict")
+    return found[0]
+
+
+def _data_root() -> Path:
+    return data_root()
+
+
+def _plugin_config() -> dict[str, str]:
+    try:
+        return plugin_config()
+    except RuntimeConfigError as exc:
+        raise AdapterError(str(exc)) from exc
+
+
+def _identity_config() -> tuple[str, str, str]:
+    """actor / presence / zone are deployment configuration — NEVER derived from the host.
+
+    Env-first-then-config, all-or-nothing identity, and namespace policy now live in the
+    shared PluginRuntime, so the Claude and Codex seats cannot silently diverge.
+    """
+    try:
+        configured = runtime_config()
+    except RuntimeConfigError as exc:
+        raise AdapterError(str(exc)) from exc
+    return configured.actor, configured.presence, configured.zone
+
+
+def build_envelope(hook: dict[str, Any]) -> dict[str, Any]:
+    """Project one Stop event to an envelope. The event decides identity and answer."""
+    transcript = _hook_str(hook, "transcript_path", error="hook_transcript_missing")
+    hook_session = _hook_str(hook, "session_id", error="hook_session_missing")
+    hook_prompt = _hook_str(hook, "prompt_id", "promptId",
+                            error="hook_prompt_id_missing",
+                            conflict="hook_prompt_id_conflict")
+    # Verbatim except the non-empty check. Whitespace, markdown and code fences are part
+    # of what was said; normalising here would store something I did not write.
+    assistant_text = _hook_str(
+        hook, "last_assistant_message", "lastAssistantMessage",
+        error="hook_answer_missing", conflict="hook_answer_conflict",
+    )
+    actor, presence, zone = _identity_config()
+    turn = find_prompt_turn(Path(transcript).expanduser(), hook_prompt)
+    # Bind the event's session to the located prompt's own session. A stale or misdirected
+    # transcript_path would otherwise yield a healthy-looking record for a DIFFERENT session.
+    if turn["session_id"] != hook_session:
+        raise AdapterError("hook_session_transcript_mismatch")
+    metadata: dict[str, Any] = {
+        "session_id": hook_session,
+        "prompt_id": hook_prompt,
+    }
+    if isinstance(hook.get("model"), str) and hook["model"]:
+        metadata["model"] = hook["model"]
+    return {
+        # Keyed by the event's OWN identity, so the many Stop firings within one turn
+        # collapse to a single stored object by construction.
+        "event_id": f"claude-code:{hook_session}:{hook_prompt}",
+        "actor": actor,
+        "presence": presence,
+        "plane": "episodic",
+        "context": "subagent" if turn["is_sidechain"] else "primary",
+        "source": "claude-code",
+        "zone": zone,
+        "user_text": turn["user_text"],
+        "assistant_text": assistant_text,
+        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "metadata": metadata,
+    }
+
+
+def _harness() -> str:
+    try:
+        return harness_bin()
+    except RuntimeConfigError as exc:
+        raise AdapterError(str(exc)) from exc
+
+
+def delivery_commands(
+    envelope: dict[str, Any], configured: RuntimeConfig
+) -> list[tuple[list[str], int]]:
+    """Shadow mode → no remote delivery. Verified mode → stage the just-enqueued event and
+    run ONE bounded shared-drainer pass. The drainer owns the durable receipt + exact
+    readback; this adapter never POSTs Musubi directly and never treats a queued row as
+    verified. Same wiring as the Codex seat — separate outbox, identical contract."""
+    if configured.delivery_mode == "shadow":
+        return []
+    db = _data_root() / envelope["actor"] / envelope["zone"] / "shadow.db"
+    harness = harness_bin(configured)
+    memory_data = memory_data_bin(configured)
+    owner = f"{envelope['actor']}-{envelope['zone']}-claude-stop"
+    return [
+        ([harness, "--db", str(db), "stage", "--event-id", envelope["event_id"]], 5),
+        (
+            [
+                harness,
+                "--db",
+                str(db),
+                "drain",
+                "--once",
+                "--owner",
+                owner,
+                "--memory-data-bin",
+                memory_data,
+                "--timeout",
+                "5",
+            ],
+            15,
+        ),
+    ]
+
+
+def _degraded_scope(hook: Any) -> dict[str, str]:
+    """Best-effort seat + session for a degraded record. Never raises.
+
+    degraded.jsonl is ONE file shared by every seat on the machine, and until now each
+    record carried only {at, reason}. That instrument can say a turn was lost; it cannot
+    say WHOSE. Recovering the 18-Aoi/10-Shiori split of the 2026-08-20 loss required
+    going to the transcripts — the plane the instrument exists to save you from.
+    (Shiori named this while reviewing the fix: "the instrument cannot name the victim.")
+
+    Both fields are identifiers, not prose: `seat` is deployment configuration and
+    `session_id` is an opaque uuid the transcript filename already exposes. Neither is
+    conversation content, so the no-second-copy-of-the-conversation invariant that keeps
+    stdout/stderr out of this sink is untouched. Every lookup is defensive: a diagnostic
+    record must never be the reason a failure path fails.
+    """
+    scope: dict[str, str] = {}
+    try:
+        actor = runtime_config().actor
+        if isinstance(actor, str) and actor:
+            scope["seat"] = actor
+    except Exception:  # noqa: BLE001 — identity may be exactly what is broken
+        pass
+    try:
+        session = hook.get("session_id") or hook.get("sessionId")
+        if isinstance(session, str) and session:
+            scope["session_id"] = session
+    except Exception:  # noqa: BLE001 — hook may be any shape, or not a dict at all
+        pass
+    return scope
+
+
+def _record_degraded(reason: str, scope: dict[str, str] | None = None) -> None:
+    root = _data_root()
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        record = {"at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "reason": reason}
+        record.update(scope or {})
+        with (root / "degraded.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def main() -> int:
+    hook: Any = None
+    try:
+        hook = json.load(sys.stdin)
+        if not isinstance(hook, dict):
+            raise AdapterError("hook_payload_invalid")
+        envelope = build_envelope(hook)
+        configured = runtime_config()
+        db = _data_root() / envelope["actor"] / envelope["zone"] / "shadow.db"
+        result = subprocess.run(
+            [_harness(), "--db", str(db), "enqueue"],
+            input=json.dumps(envelope),
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+        if result.returncode != 0:
+            # Stable code + exit status ONLY. The child's stdout/stderr can echo the
+            # envelope it was handed, which is the turn's prose: user text and my answer.
+            # degraded.jsonl is an unencrypted diagnostic sink read by tooling, so it must
+            # never become a second, unmanaged copy of the conversation.
+            raise AdapterError(f"shadow_enqueue_failed:exit={result.returncode}")
+        # Shadow default → no commands, nothing leaves the disk. Verified mode → stage +
+        # ONE bounded drainer pass; a failure here degrades visibly but never blocks the turn.
+        # env MUST carry the configured identity: the drainer's MemoryDataClient otherwise
+        # inherits ambient env, and a Stop hook runs at an arbitrary cwd where FLEET_IDENTITY/
+        # FLEET_PRESENCE are absent — the write would refuse or resolve identity from cwd.
+        delivery_env = tool_environment(configured)
+        for command, timeout in delivery_commands(envelope, configured):
+            result = subprocess.run(
+                command, text=True, capture_output=True, timeout=timeout, check=False,
+                env=delivery_env,
+            )
+            if result.returncode != 0:
+                # Same invariant as the enqueue path: exit code is diagnosis, output is content.
+                raise AdapterError(f"verified_delivery_failed:exit={result.returncode}")
+    except (AdapterError, json.JSONDecodeError, OSError, subprocess.SubprocessError) as exc:
+        reason = str(exc) if isinstance(exc, AdapterError) else "adapter_runtime_failed"
+        _record_degraded(reason, _degraded_scope(hook))
+    except Exception as exc:  # noqa: BLE001 — deliberate backstop, see below
+        # The always-exit-0 promise cannot be carried by an ALLOWLIST of exception types:
+        # that is precisely the shape that let an AttributeError kill Stop (QA blocker #2).
+        # An unforeseen failure must still degrade rather than break the session.
+        #
+        # Only the exception CLASS is recorded. str(exc) routinely embeds the value that
+        # caused it — a transcript fragment, a prompt, a path — and degraded.jsonl is a
+        # diagnostic sink, not a place to spill conversation content.
+        #
+        # NOT BaseException: KeyboardInterrupt and SystemExit propagate, because a session
+        # being interrupted or torn down is not a degraded capture and must not be recorded
+        # as one. Note MemoryError DOES inherit Exception and IS caught here — an earlier
+        # version of this comment claimed otherwise. Corrected in place rather than changing
+        # behaviour to match the wrong claim.
+        _record_degraded(f"adapter_unexpected_error:{type(exc).__name__}", _degraded_scope(hook))
+    print("{}")  # Stop hooks emit JSON; empty object = no directive, never blocks the turn
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

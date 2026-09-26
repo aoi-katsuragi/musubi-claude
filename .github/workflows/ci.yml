@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-
+
+      - name: Install plugin + dev tooling
+        run: |
+          python -m pip install --upgrade pip
+          # Pin the harness the plugin was developed against; bump in lock-step
+          # with pyproject.toml. The harness version controls the contract the
+          # adapter depends on.
+          pip install "musubi-harness>=1.0.0,<2.0.0"
+          pip install -e .
+          pip install ruff mypy pytest pytest-cov
+
+      - name: ruff (lint)
+        run: ruff check scripts tests
+
+      - name: ruff (format check)
+        run: ruff format --check scripts tests
+
+      - name: mypy --strict
+        run: mypy scripts
+
+      - name: pytest
+        run: pytest --cov=scripts --cov-report=term-missing
+
+  plugin-validate:
+    name: claude plugin validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | sh
+          echo "$HOME/.claude/bin" >> "$GITHUB_PATH"
+
+      - name: Validate plugin + marketplace manifests
+        run: claude plugin validate --strict .

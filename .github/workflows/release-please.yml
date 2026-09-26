@@ -1,0 +1,26 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: python
+          package-name: musubi-claude
+
+  # Note: this plugin ships as a Claude Code plugin (directory), not as
+  # a pip-installable wheel. Users install it via the marketplace, not
+  # via `pip install musubi-claude`. The release-please job bumps
+  # `plugin.json` and the marketplace entry version; merging the
+  # release-please PR cuts a GitHub Release for the new plugin version.
